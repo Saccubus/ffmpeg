@@ -15,13 +15,16 @@
 #include <stdio.h>
 #include <ctype.h>
 
-#ifdef HAVE_DLFCN_H
+#if HAVE_DLFCN_H
 #include <dlfcn.h>
 #else
 //dlfcn.hの無いWindows Mingw環境用
-#define dlopen(a) ((void*)LoadLibrary(a))
+#include <windows.h>
+#define dlopen(a,b) ((void*)LoadLibrary(a))
 #define dlsym(a,b) ((void*)GetProcAddress((HMODULE)(a),(b)))
 #define dlclose(a) FreeLibrary((HMODULE)(a));
+#define dlerror() "dlerror()"
+#define RTLD_NOW 0
 #endif
 
 //デリミタ。MEncoder側とは同じにしといた方がよさそう。
