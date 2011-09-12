@@ -13,7 +13,7 @@
 #include "common/framehook_ext.h"
 #include <libavformat/avformat.h>
 
-int tool_registerInfo(AVFormatContext *in_file,int64_t rec_time);
+int tool_registerInfo(int64_t duration,int64_t rec_time);
 const toolbox* tool_getToolBox(void);
 
 #endif /* SACCUBUS_AVINFO_H */

@@ -19,11 +19,11 @@ static toolbox Box = {
 
 /* こちらはffmpeg側から呼ばれる関数 */
 
-int tool_registerInfo(AVFormatContext *in_file,int64_t rec_time){
-	if(in_file->duration > rec_time && rec_time > 0){
+int tool_registerInfo(int64_t duration,int64_t rec_time){
+	if(duration > rec_time && rec_time > 0){
 		Box.video_length = ((double)rec_time) / AV_TIME_BASE;
 	}
-	Box.video_length = ((double)in_file->duration)/AV_TIME_BASE;
+	Box.video_length = ((double)duration)/AV_TIME_BASE;
 	return 0;
 }
 
