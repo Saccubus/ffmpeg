@@ -55,6 +55,7 @@ void avdevice_register_all(void)
     REGISTER_INDEV   (IEC61883,         iec61883);
     REGISTER_INDEV   (JACK,             jack);
     REGISTER_INDEV   (LAVFI,            lavfi);
+    REGISTER_INDEV    (SACCUBUS, saccubus);
     REGISTER_INDEV   (OPENAL,           openal);
     REGISTER_INOUTDEV(OSS,              oss);
     REGISTER_INDEV   (PULSE,            pulse);
