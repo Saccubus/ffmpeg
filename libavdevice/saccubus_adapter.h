@@ -64,22 +64,22 @@ struct SaccFrame{
  */
 
 // configure用
-typedef int (SaccConfigureFn)(void **sacc,const SaccToolBox *box, int argc, char *argv[]);
+typedef int (SaccConfigureFn)(void **sacc, SaccToolBox *box, int argc, char *argv[]);
 typedef SaccConfigureFn *SaccConfigureFnPtr;
 extern SaccConfigureFn SaccConfigure;
 
 // 与えられた動画サイズから、出力サイズを決定する。一度だけ、呼ばれる。
-typedef void (SaccMeasureFn)(void *sacc,const SaccToolBox *box, int srcWidth, int srcHeight, int* dstWidth, int* dstHeight);
+typedef int (SaccMeasureFn)(void *sacc, SaccToolBox *box, int srcWidth, int srcHeight, int* dstWidth, int* dstHeight);
 typedef SaccMeasureFn *SaccMeasureFnPtr;
 extern SaccMeasureFn SaccMeasure;
 
 // フレームに画像を焼きこむ
-typedef void (SaccProcessFn)(void *sacc,const SaccToolBox *box, SaccFrame *pict);
+typedef int (SaccProcessFn)(void *sacc, SaccToolBox *box, SaccFrame *pict);
 typedef SaccProcessFn *SaccProcessFnPtr;
 extern SaccProcessFn SaccProcess;
 
 // 終了時に呼ぶ
-typedef void (SaccReleaseFn)(void *sacc,const SaccToolBox *box);
+typedef int (SaccReleaseFn)(void *sacc, SaccToolBox *box);
 typedef SaccReleaseFn *SaccReleaseFnPtr;
 extern SaccReleaseFn SaccRelease;
 
