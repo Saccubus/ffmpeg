@@ -27,6 +27,21 @@
 #include "saccubus_adapter.h"
 #include "avdevice.h"
 
+//ダイナミックロード
+#if HAVE_DLFCN_H
+#include <dlfcn.h>
+#else
+//dlfcn.hの無いWindows Mingw環境用
+#include <windows.h>
+#define dlopen(a,b) ((void*)LoadLibrary(a))
+#define dlsym(a,b) ((void*)GetProcAddress((HMODULE)(a),(b)))
+#define dlclose(a) FreeLibrary((HMODULE)(a));
+#define dlerror() "dlerror()"
+#define RTLD_NOW 0
+#endif
+
+#define SACC_DELIM '|'
+
 #define VIDEO_STREAM 0
 #define AUDIO_STREAM 1
 
@@ -48,13 +63,17 @@ typedef struct {
 /* 本体に渡すツールボックス */
 	SaccToolBox toolbox;
 /* 本体の関数ポインタ */
-	void* sacc;
+	void* saccDynamic;
+	void* saccPriv;
 	char* arg;
+	int argc;
+	char** argv;
 	SaccConfigureFnPtr saccConfigure;
 	SaccMeasureFnPtr saccMeasure;
 	SaccProcessFnPtr saccProcess;
 	SaccReleaseFnPtr saccRelease;
 } SaccContext;
+
 
 static av_cold int SaccContext_init(AVFormatContext *avctx);
 static av_cold int SaccContext_delete(AVFormatContext *avctx);
@@ -62,7 +81,10 @@ static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt);
 
 static void SaccContext_clear(SaccContext* const self);
 static void SaccContext_closeCodec(SaccContext* const self);
-static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename);
+static int SaccContext_configureAdapter(SaccContext* const self, const char* const filename);
+static int SaccContext_loadAdapter(SaccContext* const self, const char* const filename);
+static void SaccContext_releaseAdapter(SaccContext* const self);
+static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filename);
 
 //---------------------------------------------------------------------------------------------------------------------
 #define OFFSET(x) offsetof(SaccContext, x)
@@ -95,8 +117,8 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 	SaccContext* const self = (SaccContext*)avctx->priv_data;
 	av_log(self, AV_LOG_WARNING, "Initializing...\n");
 	SaccContext_clear(self);
-	
-	SaccToolBox_loadVideo(&self->toolbox, "test.flv");
+	if(SaccContext_loadAdapter(self, avctx->filename) < 0) return -1;
+	if(SaccContext_configureAdapter(self, avctx->filename) < 0) return -1;
 
 	{ /* VIDEOストリームの初期化 */
 		AVStream *st;
@@ -149,6 +171,7 @@ static av_cold int SaccContext_delete(AVFormatContext *avctx)
 	SaccContext* const self = (SaccContext*)avctx->priv_data;
 	av_log(self, AV_LOG_WARNING, "Closing...\n");
 	SaccContext_closeCodec(self);
+	SaccContext_releaseAdapter(self);
 	SaccContext_clear(self);
 	return 0;
 }
@@ -174,15 +197,20 @@ static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt)
 					self->rgbFrame->linesize);
 				const double pts = ( (packet.dts != (int64_t)AV_NOPTS_VALUE) ? packet.dts : 0 ) * av_q2d(self->formatContext->streams[self->videoStreamIndex]->time_base);
 				
-				//av_log(TAG, AV_LOG_WARNING, "Time:%f\n", pts);	
-				//*vpos = (float)pts;
-				//*data = self->rgbFrame->data[self->rgbFrame->display_picture_number];
-				//*stride = self->rgbFrame->linesize[this->rgbFrame->display_picture_number];
+				{
+					SaccFrame frame;
+					frame.vpos = pts;
+					frame.data = self->rgbFrame->data[self->rgbFrame->display_picture_number];
+					frame.linesize = self->rgbFrame->linesize[self->rgbFrame->display_picture_number];
+					frame.w = self->dstWidth;
+					frame.h = self->dstHeight;
+					self->saccProcess(self->saccPriv, &self->toolbox, &frame);
+				}
 
 				{
 					AVPicture pict;
-					int pret = 0;
-					if ((pret = av_new_packet(pkt, self->bufferSize)) < 0) {
+					const int pret = av_new_packet(pkt, self->bufferSize);
+					if (pret < 0) {
 						return pret;
 					}
 					memcpy(pict.data,     self->rgbFrame->data,     4*sizeof(self->rgbFrame->data[0]));
@@ -241,7 +269,11 @@ static void SaccContext_clear(SaccContext* const self)
 	self->toolbox.currentVideo.height = -1;
 	self->toolbox.currentVideo.length = -1;
 
-	self->sacc = NULL;
+	self->saccDynamic = NULL;
+	self->saccPriv = NULL;
+	//self->arg = NULL;
+	self->argc = 0;
+	self->argv = NULL;
 	self->saccConfigure = NULL;
 	self->saccMeasure = NULL;
 	self->saccProcess = NULL;
@@ -279,7 +311,99 @@ static void SaccContext_closeCodec(SaccContext* const self)
 	self->formatContext=NULL;
 }
 
-static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename)
+static int SaccContext_loadAdapter(SaccContext* const self, const char* const filename)
+{
+	self->saccDynamic = dlopen(filename, RTLD_NOW);
+	if(!self->saccDynamic){
+		av_log(self, AV_LOG_ERROR, "Failed to load saccubus adapter: %s\nBecause: %s\n", filename, dlerror());
+		return -1;
+	}
+	self->saccConfigure = dlsym(self->saccDynamic, "SaccConfigure");
+	self->saccProcess = dlsym(self->saccDynamic, "SaccProcess");
+	self->saccMeasure = dlsym(self->saccDynamic, "SaccMeasure");
+	self->saccRelease = dlsym(self->saccDynamic, "SaccRelease");
+	
+	if(!self->saccConfigure)
+	{
+		av_log(self, AV_LOG_ERROR, "Failed to resolve function: SaccConfigure\n");
+		return -1;
+	}
+	if(!self->saccProcess)
+	{
+		av_log(self, AV_LOG_ERROR, "Failed to resolve function: SaccProcess\n");
+		return -1;
+	}
+	if(!self->saccMeasure)
+	{
+		av_log(self, AV_LOG_ERROR, "Failed to resolve function: SaccMeasure\n");
+		return -1;
+	}
+	if(!self->saccRelease)
+	{
+		av_log(self, AV_LOG_ERROR, "Failed to resolve function: SaccRelease\n");
+		return -1;
+	}
+	return 0;
+}
+
+static void SaccContext_releaseAdapter(SaccContext* const self)
+{
+	for(int i=0;i<self->argc;++i){
+		av_free(self->argv[i]);
+	}
+	av_free(self->argv);
+	self->saccRelease(self->saccPriv, &self->toolbox);
+	dlclose(self->saccDynamic);
+}
+
+static char* copyString(const char* string, int from, int to)
+{
+	if(to < 0){
+		to = strlen(string);
+	}
+	const int size = to - from;
+	char* ret = av_malloc(size+1);
+	memcpy(ret, &string[from], size);
+	ret[size]='\0';
+	return ret;
+}
+
+static int SaccContext_configureAdapter(SaccContext* const self, const char* const filename)
+{
+	if(!self->arg){
+		av_log(self, AV_LOG_ERROR, "You need to set \"-sacc\" option!!\n");
+		return -1;
+	}
+	self->argc = 1;
+	self->argv = (char**)av_malloc(sizeof(char*));
+	self->argv[0] = copyString(filename, 0, -1);
+
+	const int arglen = strlen(self->arg);
+	int last = 0;
+
+	for(int i=0;i<arglen;++i){
+		if(self->arg[i] == SACC_DELIM){
+			++self->argc;
+			self->argv=(char**)av_realloc(self->argv, self->argc * sizeof(char*));
+			self->argv[self->argc-1] = copyString(self->arg, last, i);
+			last = i+1;
+		}
+	}
+	++self->argc;
+	self->argv=(char**)av_realloc(self->argv, self->argc * sizeof(char*));
+	self->argv[self->argc-1] = copyString(self->arg, last, -1);
+	for(int i=0;i<self->argc;++i){
+		av_log(self, AV_LOG_WARNING, "arg[% 2d]=> %s\n", i, self->argv[i]);
+	}
+
+	const int ret = self->saccConfigure(&self->saccPriv, &self->toolbox, self->argc, self->argv);
+	if(ret < 0){
+		av_log(self, AV_LOG_ERROR, "Failed to configure adapter.\n");
+	}
+	return ret;
+}
+
+static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filename)
 {
 	SaccContext* const self = (SaccContext*)box->ptr;
 
@@ -329,10 +453,8 @@ static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename)
 
 
 	if(self->videoCount <= 0){
-		//FIXME: サイズを聞かなきゃ！
-		//self->saccMeasure(self->sacc, &self->toolbox, self->srcWidth, self->srcHeight, &self->dstWidth, &self->dstHeight);
-		self->dstWidth = self->srcWidth;
-		self->dstHeight = self->srcHeight;
+		self->saccMeasure(self->saccPriv, &self->toolbox, self->srcWidth, self->srcHeight, &self->dstWidth, &self->dstHeight);
+		av_log(self, AV_LOG_WARNING, "size detected: %dx%d -> %dx%d\n", self->srcWidth, self->srcHeight, self->dstWidth, self->dstHeight);
 	}
 	self->videoCount++;
 
