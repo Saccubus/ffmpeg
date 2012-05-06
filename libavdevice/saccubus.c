@@ -31,7 +31,7 @@
 #define AUDIO_STREAM 1
 
 typedef struct {
-	AVClass *class;///< class for private options
+	AVClass *klass;///< class for private options
 	int eof;
 	int videoCount;
 /* 動画管理 */
@@ -72,15 +72,13 @@ static const AVOption options[] = {
 	{ NULL },
 };
 
-static const AVClass __TAG = {
+static const AVClass avklass = {
 	.class_name = "saccubus indev",
 	.item_name  = av_default_item_name,
 	.option	 = options,
 	.version	= LIBAVUTIL_VERSION_INT,
 };
 
-static const AVClass* _TAG = &__TAG;
-static const AVClass** TAG = &_TAG;
 AVInputFormat ff_saccubus_demuxer = {
 	.name		   = "saccubus",
 	.long_name	  = NULL_IF_CONFIG_SMALL("Saccubus virtual input device"),
@@ -89,13 +87,13 @@ AVInputFormat ff_saccubus_demuxer = {
 	.read_packet	= SaccContext_readPacket,
 	.read_close	 = SaccContext_delete,
 	.flags		  = AVFMT_NOFILE,
-	.priv_class	 = &__TAG,
+	.priv_class	 = &avklass,
 };
 //---------------------------------------------------------------------------------------------------------------------
 static av_cold int SaccContext_init(AVFormatContext *avctx)
 {
-	av_log(TAG, AV_LOG_WARNING, "Initializing...\n");
 	SaccContext* const self = (SaccContext*)avctx->priv_data;
+	av_log(self, AV_LOG_WARNING, "Initializing...\n");
 	SaccContext_clear(self);
 	
 	SaccToolBox_loadVideo(&self->toolbox, "test.flv");
@@ -148,8 +146,8 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 
 static av_cold int SaccContext_delete(AVFormatContext *avctx)
 {
-	av_log(TAG, AV_LOG_WARNING, "Closing...\n");
 	SaccContext* const self = (SaccContext*)avctx->priv_data;
+	av_log(self, AV_LOG_WARNING, "Closing...\n");
 	SaccContext_closeCodec(self);
 	SaccContext_clear(self);
 	return 0;
@@ -209,7 +207,7 @@ static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt)
 	}
 	if(ret == AVERROR_EOF)
 	{
-		av_log(TAG, AV_LOG_WARNING, "video ended.\n");
+		av_log(self, AV_LOG_WARNING, "video ended.\n");
 		self->eof = 1;
 	}
 	return ret;
@@ -283,16 +281,16 @@ static void SaccContext_closeCodec(SaccContext* const self)
 
 static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename)
 {
-	SaccContext* self = (SaccContext*)box->ptr;
+	SaccContext* const self = (SaccContext*)box->ptr;
 
 	SaccContext_closeCodec(self);
 
 	if(avformat_open_input(&self->formatContext, filename, 0, 0) != 0){
-		av_log(TAG, AV_LOG_ERROR, "Failed to read file: %s\n", filename);
+		av_log(self, AV_LOG_ERROR, "Failed to read file: %s\n", filename);
 		return -1;
 	}
 	if(avformat_find_stream_info(self->formatContext, NULL)<0){
-		av_log(TAG, AV_LOG_ERROR, "Failed to read stream info: %s\n", filename);
+		av_log(self, AV_LOG_ERROR, "Failed to read stream info: %s\n", filename);
 		return -1;
 	}
 	self->videoStreamIndex = av_find_best_stream(self->formatContext, AVMEDIA_TYPE_VIDEO, -1, -1, 0, 0);
@@ -302,11 +300,11 @@ static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename)
 	AVCodec* const audioCodec = self->audioStreamIndex >= 0 ? avcodec_find_decoder(self->formatContext->streams[self->audioStreamIndex]->codec->codec_id) : 0;
 
 	if(avcodec_open2(self->formatContext->streams[self->videoStreamIndex]->codec, videoCodec, NULL) < 0){
-		av_log(TAG, AV_LOG_ERROR, "Failed to open video codec: %s\n", filename);
+		av_log(self, AV_LOG_ERROR, "Failed to open video codec: %s\n", filename);
 		return -1;
 	}
 	if(avcodec_open2(self->formatContext->streams[self->audioStreamIndex]->codec, audioCodec, NULL) < 0){
-		av_log(TAG, AV_LOG_ERROR, "Failed to open audio codec: %s\n", filename);
+		av_log(self, AV_LOG_ERROR, "Failed to open audio codec: %s\n", filename);
 		return -1;
 	}
 
@@ -316,10 +314,18 @@ static int SaccToolBox_loadVideo(SaccToolBox* box, const char* filename)
 	
 	self->toolbox.currentVideo.width = self->srcWidth;
 	self->toolbox.currentVideo.height = self->srcHeight;
-	self->toolbox.currentVideo.length = 
+	if(self->formatContext->streams[self->videoStreamIndex]->duration > 0){
+		self->toolbox.currentVideo.length = 
 		self->formatContext->streams[self->videoStreamIndex]->duration *
 		av_q2d(self->formatContext->streams[self->videoStreamIndex]->time_base);
-	av_log(TAG, AV_LOG_WARNING, "size: %dx%d length: %f\n", self->srcWidth, self->srcHeight, self->toolbox.currentVideo.length);
+	}else if(self->formatContext->streams[self->audioStreamIndex]->duration > 0){
+		self->toolbox.currentVideo.length = 
+		self->formatContext->streams[self->audioStreamIndex]->duration *
+		av_q2d(self->formatContext->streams[self->audioStreamIndex]->time_base);
+	}else{
+		self->toolbox.currentVideo.length = self->formatContext->duration * av_q2d(AV_TIME_BASE_Q);
+	}
+	av_log(self, AV_LOG_WARNING, "size: %dx%d length: %fsec\n", self->srcWidth, self->srcHeight, self->toolbox.currentVideo.length);
 
 
 	if(self->videoCount <= 0){
