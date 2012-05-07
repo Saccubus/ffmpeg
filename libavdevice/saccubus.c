@@ -526,11 +526,12 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 	self->srcWidth = self->formatContext->streams[self->videoStreamIndex]->codec->width;
 	self->srcHeight = self->formatContext->streams[self->videoStreamIndex]->codec->height;
 	
-	if(self->scaledWidth <= 0){
-		self->scaledWidth = self->srcWidth;
-	}
-	if(self->scaledHeight <= 0){
-		self->scaledHeight = self->srcHeight;
+	self->scaledWidth = self->scaledWidth <= 0 ? self->srcWidth : self->scaledWidth;
+	self->scaledHeight = self->scaledHeight <= 0 ? self->srcHeight : self->scaledHeight;
+	if((self->srcWidth*self->scaledHeight/self->srcHeight/self->scaledWidth) < 1){ //scaledの方が横長
+		self->scaledWidth = self->srcWidth * self->scaledHeight / self->srcHeight;
+	}else{
+		self->scaledHeight = self->srcHeight * self->scaledWidth / self->srcWidth;
 	}
 
 	self->toolbox.currentVideo.width = self->scaledWidth;
