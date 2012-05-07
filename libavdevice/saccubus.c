@@ -19,6 +19,7 @@
 /* #define DEBUG */
 
 #include <float.h>
+#include <limits.h>
 #include "libavutil/avstring.h"
 #include "libavutil/opt.h"
 #include "libavutil/imgutils.h"
@@ -40,10 +41,16 @@
 #define RTLD_NOW 0
 #endif
 
-#define SACC_DELIM '|'
+#define SACC_DELIM '&'
 
-#define VIDEO_STREAM 0
-#define AUDIO_STREAM 1
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+#define COLOR_FORMAT (PIX_FMT_BGR32)
+#elif __BYTE_ORDER == __BIG_ENDIAN
+#define COLOR_FORMAT (PIX_FMT_RGB32)
+#endif
+
+#define VIDEO_STREAM (0)
+#define AUDIO_STREAM (1)
 
 typedef struct {
 	AVClass *klass;///< class for private options
@@ -54,12 +61,25 @@ typedef struct {
 	int videoStreamIndex;
 	int audioStreamIndex;
 	AVFrame* rawFrame;
-	AVFrame* rgbFrame;
+	AVFrame* scaledFrame;
+	AVFrame* dstFrame;
 	struct SwsContext *swsContext;
-	int bufferSize;
-	uint8_t* buffer;
+	int scaledBufferSize;
+	uint8_t* scaledBuffer;
+	int dstBufferSize;
+	uint8_t* dstBuffer;
 	int srcWidth, srcHeight;
+	int scaledWidth, scaledHeight;
 	int dstWidth, dstHeight;
+/* fps管理 */
+	int minfps;
+	int fpsFactor;
+	int frameLeft;
+	int64_t pktDuration;
+	int64_t pktPos;
+	int64_t pktPts;
+	AVRational dstFrameTime;
+	AVRational dstTimebase;
 /* 本体に渡すツールボックス */
 	SaccToolBox toolbox;
 /* 本体の関数ポインタ */
@@ -91,6 +111,9 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 #define DEC AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
 	{ "sacc", "SaccubusArgs", OFFSET(arg),  AV_OPT_TYPE_STRING, {.str = NULL }, 0,  0, DEC },
+	{ "width", "width", OFFSET(scaledWidth), AV_OPT_TYPE_INT, {.dbl = 0}, 0, INT_MAX, DEC},
+	{ "height", "height", OFFSET(scaledHeight), AV_OPT_TYPE_INT, {.dbl = 0}, 0, INT_MAX, DEC},
+	{ "minfps", "Minimum fps", OFFSET(minfps), AV_OPT_TYPE_INT, {.dbl = 0}, 0, DBL_MAX, DEC},
 	{ NULL },
 };
 
@@ -129,12 +152,35 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 		st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
 
 		st->codec->codec_id					= CODEC_ID_RAWVIDEO;
-		st->codec->pix_fmt					= PIX_FMT_RGB24;
+		st->codec->pix_fmt					= COLOR_FORMAT;
 
 		st->r_frame_rate					= self->formatContext->streams[self->videoStreamIndex]->r_frame_rate;
 		st->start_time						= self->formatContext->streams[self->videoStreamIndex]->start_time;
 		st       ->time_base				= self->formatContext->streams[self->videoStreamIndex]       ->time_base;
 		st->codec->time_base				= self->formatContext->streams[self->videoStreamIndex]->codec->time_base;
+		if(self->minfps > 0){
+			self->fpsFactor = ceil((double)self->minfps*st->r_frame_rate.den/st->r_frame_rate.num);
+			st       ->time_base.den *= self->fpsFactor;
+			st->codec->time_base.den *= self->fpsFactor;
+			st->r_frame_rate.num *= self->fpsFactor;
+		}else{
+			self->fpsFactor = 1;
+		}
+		{
+			AVRational sec = { st->time_base.den, st->time_base.num };
+			self->dstFrameTime = av_div_q(sec, st->r_frame_rate);
+			self->dstTimebase = st->time_base;
+		}
+		self->frameLeft = 0;
+		self->pktDuration = 0;
+		self->pktPos = 0;
+		self->pktPts = AV_NOPTS_VALUE;
+		av_log(self, AV_LOG_WARNING, "FPS Factor: %d (%f -> %f), min %dfps\n",
+				self->fpsFactor,
+				(double)self->formatContext->streams[self->videoStreamIndex]->r_frame_rate.num/self->formatContext->streams[self->videoStreamIndex]->r_frame_rate.den,
+				(double)st->r_frame_rate.num/st->r_frame_rate.den,
+				self->minfps
+				);
 
 		st->codec->width					= self->dstWidth;
 		st->codec->height					= self->dstHeight;
@@ -176,11 +222,59 @@ static av_cold int SaccContext_delete(AVFormatContext *avctx)
 	return 0;
 }
 
+static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
+{
+	const int64_t dstPts = self->pktPts+(self->dstFrameTime.num*(self->fpsFactor-self->frameLeft)/self->dstFrameTime.den);
+	self->frameLeft--;
+
+	{ /* dstにさきゅばすを合成 */
+		double const pts = dstPts * av_q2d(self->dstTimebase);
+		SaccFrame dstFrame;
+		{
+			dstFrame.vpos = pts;
+			dstFrame.data = self->dstFrame->data[self->dstFrame->display_picture_number];
+			dstFrame.linesize = self->dstFrame->linesize[self->dstFrame->display_picture_number];
+			dstFrame.w = self->dstWidth;
+			dstFrame.h = self->dstHeight;
+		}
+		SaccFrame videoFrame;
+		{
+			videoFrame.vpos = pts;
+			videoFrame.data = self->scaledFrame->data[self->scaledFrame->display_picture_number];
+			videoFrame.linesize = self->scaledFrame->linesize[self->scaledFrame->display_picture_number];
+			videoFrame.w = self->scaledWidth;
+			videoFrame.h = self->scaledHeight;
+		}
+		self->saccProcess(self->saccPriv, &self->toolbox, &dstFrame, &videoFrame);
+	}
+
+	{ // dstの構築
+		AVPicture dstPict;
+		memcpy(dstPict.data,     self->dstFrame->data,     AV_NUM_DATA_POINTERS*sizeof(self->dstFrame->data[0]));
+		memcpy(dstPict.linesize, self->dstFrame->linesize, AV_NUM_DATA_POINTERS*sizeof(self->dstFrame->linesize[0]));
+		/* パケットの構築 */
+		const int pret = av_new_packet(pkt, self->dstBufferSize);
+		if (pret < 0) {
+			return pret;
+		}
+		avpicture_layout(&dstPict, COLOR_FORMAT, self->dstWidth, self->dstHeight, pkt->data, self->dstBufferSize);
+	}
+	pkt->stream_index = VIDEO_STREAM;
+	pkt->duration = self->pktDuration;
+	pkt->pts = dstPts;
+	pkt->pos = self->pktPos;
+	pkt->size = self->scaledBufferSize;
+	return 0;
+}
+
 static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt)
 {
 	SaccContext* const self = (SaccContext*)avctx->priv_data;
 	if(self->eof){
 		return AVERROR_EOF;
+	}
+	if(self->frameLeft > 0){
+		return createVideoPacket(self, pkt);
 	}
 	AVPacket packet;
 	int ret = 0;
@@ -193,36 +287,14 @@ static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt)
 					self->swsContext,
 					(const uint8_t * const*)self->rawFrame->data,
 					self->rawFrame->linesize, 0, self->srcHeight,
-					self->rgbFrame->data,
-					self->rgbFrame->linesize);
-				const double pts = ( (packet.dts != (int64_t)AV_NOPTS_VALUE) ? packet.dts : 0 ) * av_q2d(self->formatContext->streams[self->videoStreamIndex]->time_base);
-				
-				{
-					SaccFrame frame;
-					frame.vpos = pts;
-					frame.data = self->rgbFrame->data[self->rgbFrame->display_picture_number];
-					frame.linesize = self->rgbFrame->linesize[self->rgbFrame->display_picture_number];
-					frame.w = self->dstWidth;
-					frame.h = self->dstHeight;
-					self->saccProcess(self->saccPriv, &self->toolbox, &frame);
-				}
-
-				{
-					AVPicture pict;
-					const int pret = av_new_packet(pkt, self->bufferSize);
-					if (pret < 0) {
-						return pret;
-					}
-					memcpy(pict.data,     self->rgbFrame->data,     4*sizeof(self->rgbFrame->data[0]));
-					memcpy(pict.linesize, self->rgbFrame->linesize, 4*sizeof(self->rgbFrame->linesize[0]));
-					avpicture_layout(&pict, PIX_FMT_RGB24, self->dstWidth, self->dstHeight, pkt->data, self->bufferSize);
-				}
-				pkt->stream_index = VIDEO_STREAM;
-				pkt->duration = packet.duration;
-				pkt->pts = packet.pts;
-				pkt->pos = packet.pos;
-				pkt->size = self->bufferSize;
+					self->scaledFrame->data,
+					self->scaledFrame->linesize);
+				self->pktDuration = packet.duration * self->fpsFactor;
+				self->pktPos = packet.pos;
+				self->pktPts = packet.pts != AV_NOPTS_VALUE ? (packet.pts * self->fpsFactor) : 0;
+				self->frameLeft = self->fpsFactor;
 				av_free_packet(&packet);
+				ret = createVideoPacket(self, pkt);
 				break;
 			}
 		} else if(packet.stream_index == self->audioStreamIndex){
@@ -252,15 +324,25 @@ static void SaccContext_clear(SaccContext* const self)
 	self->videoStreamIndex = -1;
 	self->audioStreamIndex = -1;
 	self->rawFrame = NULL;
-	self->rgbFrame = NULL;
+	self->scaledFrame = NULL;
+	self->dstFrame = NULL;
 	self->swsContext = NULL;
-	self->bufferSize = -1;
-	self->buffer = NULL;
+	self->scaledBufferSize = -1;
+	self->scaledBuffer = NULL;
+	self->dstBufferSize = -1;
+	self->dstBuffer = NULL;
 	self->srcWidth=-1;
 	self->srcHeight=-1;
 	self->dstWidth=-1;
 	self->dstHeight=-1;
 	
+	self->fpsFactor = 1;
+	self->frameLeft = 0;
+	self->pktDuration = 0;
+	self->pktPos = 0;
+	self->pktPts = AV_NOPTS_VALUE;
+	self->dstFrameTime.den = self->dstFrameTime.num = 0;
+
 	self->toolbox.ptr = self;
 	self->toolbox.version = TOOLBOX_VERSION;
 	self->toolbox.loadVideo = SaccToolBox_loadVideo;
@@ -286,14 +368,22 @@ static void SaccContext_closeCodec(SaccContext* const self)
 	 * 現在開いているコーデックというかファイルがあれば、それをクローズする。
 	 * 開いているかどうかの判断に、ポインタが0であるか否かを用いているので、最初の初期化には使えない。
 	 */
-	if(self->buffer != NULL){
-		av_free(self->buffer);
+	if(self->scaledBuffer != NULL){
+		av_free(self->scaledBuffer);
 	}
-	self->buffer = NULL;
-	if(self->rgbFrame != NULL){
-		av_free(self->rgbFrame);
+	self->scaledBuffer = NULL;
+	if(self->scaledFrame != NULL){
+		av_free(self->scaledFrame);
 	}
-	self->rgbFrame = NULL;
+	self->scaledFrame = NULL;
+	if(self->dstBuffer != NULL){
+		av_free(self->dstBuffer);
+	}
+	self->dstBuffer = NULL;
+	if(self->dstFrame != NULL){
+		av_free(self->dstFrame);
+	}
+	self->dstFrame = NULL;
 	if(self->rawFrame != NULL){
 		av_free(self->rawFrame);
 	}
@@ -436,8 +526,15 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 	self->srcWidth = self->formatContext->streams[self->videoStreamIndex]->codec->width;
 	self->srcHeight = self->formatContext->streams[self->videoStreamIndex]->codec->height;
 	
-	self->toolbox.currentVideo.width = self->srcWidth;
-	self->toolbox.currentVideo.height = self->srcHeight;
+	if(self->scaledWidth <= 0){
+		self->scaledWidth = self->srcWidth;
+	}
+	if(self->scaledHeight <= 0){
+		self->scaledHeight = self->srcHeight;
+	}
+
+	self->toolbox.currentVideo.width = self->scaledWidth;
+	self->toolbox.currentVideo.height = self->scaledHeight;
 	if(self->formatContext->streams[self->videoStreamIndex]->duration > 0){
 		self->toolbox.currentVideo.length = 
 		self->formatContext->streams[self->videoStreamIndex]->duration *
@@ -449,22 +546,34 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 	}else{
 		self->toolbox.currentVideo.length = self->formatContext->duration * av_q2d(AV_TIME_BASE_Q);
 	}
+
 	av_log(self, AV_LOG_WARNING, "size: %dx%d length: %fsec\n", self->srcWidth, self->srcHeight, self->toolbox.currentVideo.length);
 
 
 	if(self->videoCount <= 0){
-		self->saccMeasure(self->saccPriv, &self->toolbox, self->srcWidth, self->srcHeight, &self->dstWidth, &self->dstHeight);
-		av_log(self, AV_LOG_WARNING, "size detected: %dx%d -> %dx%d\n", self->srcWidth, self->srcHeight, self->dstWidth, self->dstHeight);
+		self->saccMeasure(self->saccPriv, &self->toolbox, self->scaledWidth, self->scaledHeight, &self->dstWidth, &self->dstHeight);
+		av_log(self, AV_LOG_WARNING, "size detected: %dx%d -> %dx%d -> %dx%d\n",
+				self->srcWidth, self->srcHeight,
+				self->scaledWidth, self->scaledHeight,
+				self->dstWidth, self->dstHeight
+				);
 	}
 	self->videoCount++;
 
 	self->rawFrame = avcodec_alloc_frame();
-	self->rgbFrame = avcodec_alloc_frame();
-	self->swsContext = sws_getContext(self->srcWidth, self->srcHeight, self->formatContext->streams[self->videoStreamIndex]->codec->pix_fmt, self->dstWidth, self->dstHeight, PIX_FMT_RGB24, SWS_BICUBIC, 0, 0, 0);
-	self->bufferSize = avpicture_get_size(PIX_FMT_RGB24, self->srcWidth, self->srcHeight)*sizeof(uint8_t);
-	self->buffer = (uint8_t*)av_malloc(self->bufferSize);
-	avpicture_fill((AVPicture*)self->rgbFrame, self->buffer, PIX_FMT_RGB24, self->srcWidth, self->srcHeight);
-	
+	self->scaledFrame = avcodec_alloc_frame();
+	self->dstFrame = avcodec_alloc_frame();
+
+	self->swsContext = sws_getContext(self->srcWidth, self->srcHeight, self->formatContext->streams[self->videoStreamIndex]->codec->pix_fmt, self->scaledWidth, self->scaledHeight, COLOR_FORMAT, SWS_BICUBIC, 0, 0, 0);
+
+	self->scaledBufferSize = avpicture_get_size(COLOR_FORMAT, self->scaledWidth, self->scaledHeight)*sizeof(uint8_t);
+	self->scaledBuffer = (uint8_t*)av_malloc(self->scaledBufferSize);
+	avpicture_fill((AVPicture*)self->scaledFrame, self->scaledBuffer, COLOR_FORMAT, self->scaledWidth, self->scaledHeight);
+
+	self->dstBufferSize = avpicture_get_size(COLOR_FORMAT, self->dstWidth, self->dstHeight)*sizeof(uint8_t);
+	self->dstBuffer = (uint8_t*)av_malloc(self->dstBufferSize);
+	avpicture_fill((AVPicture*)self->dstFrame, self->dstBuffer, COLOR_FORMAT, self->dstWidth, self->dstHeight);
+
 	return 0;
 }
 
