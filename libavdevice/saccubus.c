@@ -41,7 +41,7 @@
 #define RTLD_NOW 0
 #endif
 
-#define SACC_DELIM '&'
+#define SACC_DELIM '#'
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 #define COLOR_FORMAT (PIX_FMT_BGR32)
