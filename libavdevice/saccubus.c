@@ -73,7 +73,7 @@ typedef struct {
 	int frameLeft;
 	int64_t pktDuration;
 	int64_t pktPos;
-	int64_t pktPts;
+	int64_t pktDts;
 	AVRational dstFrameTime;
 	AVRational dstTimebase;
 /* 本体に渡すツールボックス */
@@ -170,7 +170,7 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 		self->frameLeft = 0;
 		self->pktDuration = 0;
 		self->pktPos = 0;
-		self->pktPts = AV_NOPTS_VALUE;
+		self->pktDts = AV_NOPTS_VALUE;
 		av_log(self, AV_LOG_WARNING, "FPS Factor: %d (%f -> %f), min %dfps\n",
 				self->fpsFactor,
 				(double)self->formatContext->streams[self->videoStreamIndex]->r_frame_rate.num/self->formatContext->streams[self->videoStreamIndex]->r_frame_rate.den,
@@ -220,11 +220,11 @@ static av_cold int SaccContext_delete(AVFormatContext *avctx)
 
 static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
 {
-	const int64_t dstPts = self->pktPts+(self->dstFrameTime.num*(self->fpsFactor-self->frameLeft)/self->dstFrameTime.den);
+	const int64_t dstDts = self->pktDts+(self->dstFrameTime.num*(self->fpsFactor-self->frameLeft)/self->dstFrameTime.den);
 	self->frameLeft--;
 
 	{ /* dstにさきゅばすを合成 */
-		double const pts = dstPts * av_q2d(self->dstTimebase);
+		double const pts = dstDts * av_q2d(self->dstTimebase);
 		SaccFrame dstFrame;
 		{
 			dstFrame.vpos = pts;
@@ -241,7 +241,6 @@ static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
 			videoFrame.w = self->scaledWidth;
 			videoFrame.h = self->scaledHeight;
 		}
-		av_log(self, AV_LOG_WARNING, "time: %f\n", pts);
 		self->saccProcess(self->saccPriv, &self->toolbox, &dstFrame, &videoFrame);
 	}
 
@@ -258,7 +257,8 @@ static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
 	}
 	pkt->stream_index = VIDEO_STREAM;
 	pkt->duration = self->pktDuration;
-	pkt->pts = dstPts;
+	pkt->dts = dstDts;
+	pkt->pts = dstDts;
 	pkt->pos = self->pktPos;
 	pkt->size = self->scaledBufferSize;
 	return 0;
@@ -288,7 +288,10 @@ static int SaccContext_readPacket(AVFormatContext *avctx, AVPacket *pkt)
 					self->scaledFrame->linesize);
 				self->pktDuration = packet.duration * self->fpsFactor;
 				self->pktPos = packet.pos;
-				self->pktPts = packet.pts != AV_NOPTS_VALUE ? (packet.pts * self->fpsFactor) : 0;
+				// FIXME:DTSとPTSの区別をつける
+				// DTS!=DPSなフレームが来たら貯めこんでおいて、DTS==DPSなフレームが来たら一気に戻せばOK?
+				// http://htffmpegx.seesaa.net/article/15410871.html
+				self->pktDts = packet.dts != AV_NOPTS_VALUE ? (packet.dts * self->fpsFactor) : 0;
 				self->frameLeft = self->fpsFactor;
 				av_free_packet(&packet);
 				ret = createVideoPacket(self, pkt);
@@ -337,7 +340,7 @@ static void SaccContext_clear(SaccContext* const self)
 	self->frameLeft = 0;
 	self->pktDuration = 0;
 	self->pktPos = 0;
-	self->pktPts = AV_NOPTS_VALUE;
+	self->pktDts = AV_NOPTS_VALUE;
 	self->dstFrameTime.den = self->dstFrameTime.num = 0;
 
 	self->toolbox.ptr = self;
