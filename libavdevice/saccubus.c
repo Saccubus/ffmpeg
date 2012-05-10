@@ -43,11 +43,7 @@
 
 #define SACC_DELIM '#'
 
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-#define COLOR_FORMAT (PIX_FMT_BGR32)
-#elif __BYTE_ORDER == __BIG_ENDIAN
 #define COLOR_FORMAT (PIX_FMT_RGB32)
-#endif
 
 #define VIDEO_STREAM (0)
 #define AUDIO_STREAM (1)
@@ -245,6 +241,7 @@ static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
 			videoFrame.w = self->scaledWidth;
 			videoFrame.h = self->scaledHeight;
 		}
+		av_log(self, AV_LOG_WARNING, "time: %f\n", pts);
 		self->saccProcess(self->saccPriv, &self->toolbox, &dstFrame, &videoFrame);
 	}
 
