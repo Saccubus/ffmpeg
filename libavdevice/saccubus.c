@@ -141,6 +141,7 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 
 	{ /* VIDEOストリームの初期化 */
 		AVStream *st;
+		const AVStream *orig = self->formatContext->streams[self->videoStreamIndex];
 		if (!(st = avformat_new_stream(avctx, NULL))){
 			return AVERROR(ENOMEM);
 		}
@@ -150,10 +151,10 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 		st->codec->codec_id					= CODEC_ID_RAWVIDEO;
 		st->codec->pix_fmt					= COLOR_FORMAT;
 
-		st->r_frame_rate					= self->formatContext->streams[self->videoStreamIndex]->r_frame_rate;
-		st->start_time						= self->formatContext->streams[self->videoStreamIndex]->start_time;
-		st       ->time_base				= self->formatContext->streams[self->videoStreamIndex]       ->time_base;
-		st->codec->time_base				= self->formatContext->streams[self->videoStreamIndex]->codec->time_base;
+		st->r_frame_rate					= orig->r_frame_rate;
+		st->start_time						= orig->start_time;
+		st       ->time_base				= orig       ->time_base;
+		st->codec->time_base				= orig->codec->time_base;
 		if(self->minfps > 0){
 			self->fpsFactor = ceil((double)self->minfps*st->r_frame_rate.den/st->r_frame_rate.num);
 			st       ->time_base.den *= self->fpsFactor;
@@ -186,24 +187,23 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 	}
 	
 	{ /* AUDIOストリームの初期化 */
+		AVStream *orig = self->formatContext->streams[self->audioStreamIndex];
 		AVStream *st;
-		if (!(st = avformat_new_stream(avctx, NULL))){
+		if (!(st = avformat_new_stream(avctx, self->formatContext->streams[self->audioStreamIndex]->codec->codec))){
 			return AVERROR(ENOMEM);
 		}
-		st->id							= AUDIO_STREAM;
-		st->codec->codec_type		= AVMEDIA_TYPE_AUDIO;
-
-		st->codec->codec_id			= self->formatContext->streams[self->audioStreamIndex]->codec->codec_id;
-
-		st->r_frame_rate			= self->formatContext->streams[self->audioStreamIndex]->r_frame_rate;
-		st->start_time				= self->formatContext->streams[self->audioStreamIndex]->start_time;
-		st       ->time_base		= self->formatContext->streams[self->audioStreamIndex]       ->time_base;
-		st->codec->time_base		= self->formatContext->streams[self->audioStreamIndex]->codec->time_base;
-
-		st->codec->channels			= self->formatContext->streams[self->audioStreamIndex]->codec->channels;
-		st->codec->sample_fmt		= self->formatContext->streams[self->audioStreamIndex]->codec->sample_fmt;
-		st->codec->sample_rate		= self->formatContext->streams[self->audioStreamIndex]->codec->sample_rate;
-		st->codec->channel_layout	= self->formatContext->streams[self->audioStreamIndex]->codec->channel_layout;
+		st->id				= AUDIO_STREAM;
+		st->r_frame_rate	= orig->r_frame_rate;
+		st->pts				= orig->pts;
+		st->duration		= orig->duration;
+		st->duration		= orig->duration;
+		st->nb_frames		= orig->nb_frames;
+		st->nb_index_entries= orig->nb_index_entries;
+		st->start_time		= orig->start_time;
+		st->time_base		= orig->time_base;
+		st->discard			= orig->discard;
+		st->disposition		= orig->disposition;
+		avcodec_copy_context(st->codec, orig->codec);
 	}
 	return 0;
 }
