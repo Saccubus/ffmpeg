@@ -187,7 +187,7 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 	}
 	
 	{ /* AUDIOストリームの初期化 */
-		AVStream *orig = self->formatContext->streams[self->audioStreamIndex];
+		const AVStream *orig = self->formatContext->streams[self->audioStreamIndex];
 		AVStream *st;
 		if (!(st = avformat_new_stream(avctx, self->formatContext->streams[self->audioStreamIndex]->codec->codec))){
 			return AVERROR(ENOMEM);
