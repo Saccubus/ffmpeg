@@ -2609,6 +2609,7 @@ static int transcode_init(void)
         if ((ret = avfilter_graph_config(filtergraphs[i]->graph, NULL)) < 0)
             return ret;
 
+	tool_registerInfo(input_files[nb_input_files - 1]->ctx->duration, output_files[nb_output_files - 1]->recording_time);
     /* for each output stream, we compute the right encoding parameters */
     for (i = 0; i < nb_output_streams; i++) {
         AVCodecContext *enc_ctx;
@@ -3089,7 +3090,6 @@ static int transcode_init(void)
             p->discard = discard;
         }
     }
-	tool_registerInfo(input_files[nb_input_files - 1].ctx->duration, output_files[nb_output_files - 1].recording_time);
 
     /* open files and write file headers */
     for (i = 0; i < nb_output_files; i++) {
