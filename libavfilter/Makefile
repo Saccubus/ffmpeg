@@ -294,6 +294,7 @@ SKIPHEADERS-$(CONFIG_OPENCL)                 += opencl_internal.h deshake_opencl
 
 OBJS-$(HAVE_THREADS)                         += pthread.o
 OBJS-$(CONFIG_SHARED)                        += log2_tab.o
+OBJS-$(CONFIG_VHEXT_FILTER)                  += vf_vhext.o
 
 TOOLS     = graph2dot
 TESTPROGS = drawutils filtfmts formats
