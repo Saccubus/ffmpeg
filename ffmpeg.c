@@ -2924,7 +2924,6 @@ static int transcode_init(void)
                         parse_forced_key_frames(ost->forced_keyframes, ost, ost->enc_ctx);
                     }
                 }
-				tool_registerInfo(input_files[nb_input_files - 1].ctx->duration, output_files[nb_output_files - 1].recording_time);
                 break;
             case AVMEDIA_TYPE_SUBTITLE:
                 enc_ctx->time_base = (AVRational){1, 1000};
@@ -3090,6 +3089,7 @@ static int transcode_init(void)
             p->discard = discard;
         }
     }
+	tool_registerInfo(input_files[nb_input_files - 1].ctx->duration, output_files[nb_output_files - 1].recording_time);
 
     /* open files and write file headers */
     for (i = 0; i < nb_output_files; i++) {
