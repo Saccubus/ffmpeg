@@ -308,6 +308,8 @@ void avfilter_register_all(void)
     REGISTER_FILTER(ZOOMPAN,        zoompan,        vf);
     REGISTER_FILTER(ZSCALE,         zscale,         vf);
 
+    REGISTER_FILTER(VHEXT,          vhext,          vf);
+
     REGISTER_FILTER(ALLRGB,         allrgb,         vsrc);
     REGISTER_FILTER(ALLYUV,         allyuv,         vsrc);
     REGISTER_FILTER(CELLAUTO,       cellauto,       vsrc);
