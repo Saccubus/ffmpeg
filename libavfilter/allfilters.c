@@ -226,6 +226,7 @@ void avfilter_register_all(void)
     REGISTER_FILTER(YADIF,          yadif,          vf);
     REGISTER_FILTER(ZMQ,            zmq,            vf);
     REGISTER_FILTER(ZOOMPAN,        zoompan,        vf);
+	REGISTER_FILTER (VHEXT,       vhext,       vf);
 
     REGISTER_FILTER(CELLAUTO,       cellauto,       vsrc);
     REGISTER_FILTER(COLOR,          color,          vsrc);

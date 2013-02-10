@@ -66,6 +66,7 @@
 # include "libavfilter/avfilter.h"
 # include "libavfilter/buffersrc.h"
 # include "libavfilter/buffersink.h"
+# include "libavfilter/avtool.h"
 
 #if HAVE_SYS_RESOURCE_H
 #include <sys/time.h>
@@ -2923,6 +2924,7 @@ static int transcode_init(void)
                         parse_forced_key_frames(ost->forced_keyframes, ost, ost->enc_ctx);
                     }
                 }
+                tool_registerInfo(is, recording_time);
                 break;
             case AVMEDIA_TYPE_SUBTITLE:
                 enc_ctx->time_base = (AVRational){1, 1000};
