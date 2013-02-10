@@ -60,19 +60,19 @@ int decode(char* s,int len);
 
 static int init(AVFilterContext *ctx, const char *args, void *opaque){
 	//Contextをとりあえず確保
-    Context *context= ctx->priv;
-    av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]called with args = %s.\n",args);
+    Context* const context= ctx->priv;
+    av_log(ctx, AV_LOG_INFO, "called with args = %s.\n",args);
 
 	//引数がNULLなのはおかしい
     if(!args) {
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Invalid arguments.\n");
+        av_log(ctx, AV_LOG_ERROR, "Invalid arguments.\n");
         return -1;
     }
-    int arg_len = strlen(args);
+    int const arg_len = strlen(args);
     //引数のコピー
     context->args = (char*)av_malloc(arg_len+1);
     if(!context->args){
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to malloc memory for args.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to malloc memory for args.\n");
         return -1;
     }
     memcpy(context->args,args,arg_len);
@@ -83,21 +83,24 @@ static int init(AVFilterContext *ctx, const char *args, void *opaque){
 	//引数の展開
 	context->argv = split(context->args,arg_len,&context->argc,VHEXT_DELIM);
 	if(!context->argv){
-            av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to split args.\n");
+            av_log(ctx, AV_LOG_ERROR, "Failed to split args.\n");
             return -1;
 	}
 
 	//ツールボックスを取得
 	context->Box = tool_getToolBox();
 	if(!context->Box){
-            av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to get ToolBox.\n");
+            av_log(ctx, AV_LOG_ERROR, "Failed to get ToolBox.\n");
+            return -1;
+	}else if(!(context->Box->video_length > 0)){
+            av_log(ctx, AV_LOG_ERROR, "ToolBox may be not initialized yet.\n");
             return -1;
 	}
 
 	//DLL読み込み
     context->Dynamic = dlopen(context->argv[0], RTLD_NOW);
     if (!context->Dynamic) {
-        av_log(NULL, AV_LOG_ERROR, "[libavfilter/VhookExt Filter][Lib:%s]Failed to open lib: %s\nMSG:%s\n",context->argv[0],context->argv[0], dlerror());
+        av_log(NULL, AV_LOG_ERROR, "Failed to open lib: %s\nMSG:%s\n",context->argv[0],context->argv[0], dlerror());
         return -1;
     }
 	//各関数を取得
@@ -105,22 +108,22 @@ static int init(AVFilterContext *ctx, const char *args, void *opaque){
 	context->ExtProcess = dlsym(context->Dynamic, "ExtProcess");
 	context->ExtRelease = dlsym(context->Dynamic, "ExtRelease");
 	if(!context->ExtConfigure){
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to get ExtConfigure.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to get ExtConfigure.\n");
         return -1;
 	}
 	if(!context->ExtProcess){
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to get ExtProcess.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to get ExtProcess.\n");
         return -1;
 	}
 	if(!context->ExtRelease){
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to get ExtRelease.\n");
+        av_log(ctx, AV_LOG_ERROR, "Failed to get ExtRelease.\n");
         return -1;
 	}
 
 	//Configureを呼び出す
 	int code;
 	if((code = context->ExtConfigure(&context->Context,context->Box,context->argc,context->argv))){
-        av_log(ctx, AV_LOG_ERROR, "[libavfilter/VhookExt Filter]Failed to configure.Code:%d\n",code);
+        av_log(ctx, AV_LOG_ERROR, "Failed to configure.Code:%d\n",code);
         return -1;
 	}
     return 0;
@@ -144,8 +147,9 @@ static void uninit(AVFilterContext *ctx){
 
 static int query_formats(AVFilterContext *ctx){
 	//SDLで使いやすくするためにRGB24フォーマットを要求する。
-    enum PixelFormat pix_fmts[] = { PIX_FMT_RGB24, PIX_FMT_NONE };
-    avfilter_set_common_formats(ctx,avfilter_make_format_list(pix_fmts));
+    static const enum PixelFormat pix_fmts[] = { PIX_FMT_RGB24, PIX_FMT_NONE };
+
+    ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
     return 0;
 }
 
@@ -153,31 +157,43 @@ static int query_formats(AVFilterContext *ctx){
  * AVFilterPadのInput側に呼ばれる関数
  */
 
-static void start_frame(AVFilterLink *link, AVFilterBufferRef *bufref){
-	//おまじない
-    avfilter_start_frame(link->dst->outputs[0], bufref);
-}
-
-static void end_frame(AVFilterLink *link){
+static int filter_frame(AVFilterLink *inlink, AVFilterBufferRef *picref)
+{
 	//ポインタは基本
-    Context *context = link->dst->priv;
-    //よくわからないけどとりあえずおまじない（えー
-    AVFilterLink* output = link->dst->outputs[0];
-    AVFilterBufferRef *buf = link->cur_buf;
+    AVFilterContext* const ctx = inlink->dst;
+    AVFilterLink* const outlink = ctx->outputs[0];
+    Context* const context = (Context*)ctx->priv;
     //独自構造体に代入
     vhext_frame frame;
-    frame.data = buf->data[0];
-    frame.linesize = buf->linesize[0];
-    frame.w = buf->video->w;
-    frame.h = buf->video->h;
-    frame.pts = ((double)buf->pts) / AV_TIME_BASE;
+    frame.data = picref->data[0];
+    frame.linesize = picref->linesize[0];
+    frame.w = inlink->w;
+    frame.h = inlink->h;
+    frame.pts = picref->pts * av_q2d(inlink->time_base);
 	//ライブラリを呼び出す。
 	context->ExtProcess(context->Context,context->Box,&frame);
 
-    //おなじくおなじまい（えええ
-    avfilter_draw_slice(output, 0, buf->video->h, 1);
-    avfilter_end_frame(output);
+	return ff_filter_frame(outlink, picref);
 }
+
+static const AVFilterPad vhext_inputs[] = {
+    {
+        .name             = "default",
+        .type             = AVMEDIA_TYPE_VIDEO,
+        .filter_frame     = filter_frame,
+        .min_perms        = AV_PERM_READ | AV_PERM_WRITE,
+        .rej_perms       = AV_PERM_REUSE | AV_PERM_REUSE2,
+    },
+    { NULL }
+};
+
+static const AVFilterPad vhext_outputs[] = {
+    {
+        .name = "default",
+        .type = AVMEDIA_TYPE_VIDEO,
+    },
+    { NULL }
+};
 
 AVFilter avfilter_vf_vhext=
 {
@@ -189,18 +205,8 @@ AVFilter avfilter_vf_vhext=
     .uninit    = uninit,
 
     .query_formats   = query_formats,
-    .inputs    = (AVFilterPad[]) {{ .name            = "default",
-                                    .type            = AVMEDIA_TYPE_VIDEO,
-                                    .start_frame     = start_frame,
-                                    .end_frame       = end_frame,
-                                    .min_perms       = AV_PERM_WRITE |
-                                                       AV_PERM_READ,
-                                    .rej_perms       = AV_PERM_REUSE |
-                                                       AV_PERM_REUSE2},
-                                  { .name = NULL}},
-    .outputs   = (AVFilterPad[]) {{ .name            = "default",
-                                    .type            = AVMEDIA_TYPE_VIDEO, },
-                                  { .name = NULL}},
+    .inputs    = vhext_inputs,
+    .outputs   = vhext_outputs
 };
 
 /*
