@@ -260,7 +260,7 @@ static int createVideoPacket(SaccContext* const self, AVPacket *pkt)
 	pkt->dts = dstDts;
 	pkt->pts = dstDts;
 	pkt->pos = self->pktPos;
-	pkt->size = self->scaledBufferSize;
+	pkt->size = self->dstBufferSize;
 	return 0;
 }
 
@@ -548,7 +548,7 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 		self->toolbox.currentVideo.length = self->formatContext->duration * av_q2d(AV_TIME_BASE_Q);
 	}
 
-	av_log(self, AV_LOG_WARNING, "size: %dx%d length: %fsec\n", self->srcWidth, self->srcHeight, self->toolbox.currentVideo.length);
+	av_log(self, AV_LOG_WARNING, "source size: %dx%d length: %fsec\n", self->srcWidth, self->srcHeight, self->toolbox.currentVideo.length);
 
 
 	if(self->videoCount <= 0){
@@ -558,6 +558,20 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 				self->scaledWidth, self->scaledHeight,
 				self->dstWidth, self->dstHeight
 				);
+		//XXX: 各種フォーマットで許容される辺のサイズは違うけど、
+		// そういった制約を統一的に調べる方法はない。でも大体４の倍数なら許されるのでそれで誤魔化す。ひどい。
+		int const paddedDstW = 
+				(self->dstWidth & 3) >= 2 ? (self->dstWidth & ~3)+4 : (self->dstWidth & ~3);
+		int const paddedDstH = 
+				(self->dstHeight & 3) >= 2 ? (self->dstHeight & ~3)+4 : (self->dstHeight & ~3);
+		if ( self->dstWidth != paddedDstW || self->dstHeight != paddedDstH ) {
+			av_log(self, AV_LOG_WARNING, "XXX: dimension should be multiples of 4: %dx%d -> %dx%d\n",
+					self->dstWidth, self->dstHeight,
+					paddedDstW, paddedDstH
+				  );
+			self->dstWidth = paddedDstW;
+			self->dstHeight = paddedDstH;
+		}
 	}
 	self->videoCount++;
 
