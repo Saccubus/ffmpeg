@@ -8,7 +8,7 @@
  * このファイルは「さきゅばす」の一部であり、
  * このソースコードはGPLライセンスで配布されますです。
  */
-#include "avfilter.h"
+#include "internal.h"
 #include "common/framehook_ext.h"
 #include "avtool.h"
 #include <string.h>
