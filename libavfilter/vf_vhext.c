@@ -195,7 +195,7 @@ static const AVFilterPad vhext_outputs[] = {
     { NULL }
 };
 
-AVFilter avfilter_vf_vhext=
+AVFilter ff_vf_vhext=
 {
     .name      = "vhext",
 
