@@ -8,6 +8,8 @@
  * このファイルは「さきゅばす」の一部であり、
  * このソースコードはGPLライセンスで配布されますです。
  */
+#include "libavutil/opt.h"
+#include "avfilter.h"
 #include "internal.h"
 #include "common/framehook_ext.h"
 #include "avtool.h"
@@ -31,7 +33,9 @@
 #define VHEXT_DELIM '|'
 
 typedef struct{
+	const AVClass *class;
 	//引数はあとあと使うので確保。
+	char* vhextargs;
 	char* args;
 	char** argv;
 	int argc;
@@ -58,17 +62,19 @@ int decode(char* s,int len);
  *  AVFilter構造体に格納される関数群
  */
 
-static int init(AVFilterContext *ctx, const char *args, void *opaque){
-	//Contextをとりあえず確保
+static av_cold int init(AVFilterContext *ctx){
+    //Contextをとりあえず確保
     Context* const context= ctx->priv;
+    int code;
+    char* const args = context->vhextargs;
+    int const arg_len = strlen(args);
     av_log(ctx, AV_LOG_INFO, "called with args = %s.\n",args);
 
-	//引数がNULLなのはおかしい
+    //引数がNULLなのはおかしい
     if(!args) {
         av_log(ctx, AV_LOG_ERROR, "Invalid arguments.\n");
         return -1;
     }
-    int const arg_len = strlen(args);
     //引数のコピー
     context->args = (char*)av_malloc(arg_len+1);
     if(!context->args){
@@ -97,10 +103,10 @@ static int init(AVFilterContext *ctx, const char *args, void *opaque){
             return -1;
 	}
 
-	//DLL読み込み
+    //DLL読み込み
     context->Dynamic = dlopen(context->argv[0], RTLD_NOW);
     if (!context->Dynamic) {
-        av_log(NULL, AV_LOG_ERROR, "Failed to open lib: %s\nMSG:%s\n",context->argv[0],context->argv[0], dlerror());
+        av_log(ctx, AV_LOG_ERROR, "Failed to open lib: %s\nMSG:%s\n",context->argv[0],context->argv[0], dlerror());
         return -1;
     }
 	//各関数を取得
@@ -121,7 +127,6 @@ static int init(AVFilterContext *ctx, const char *args, void *opaque){
 	}
 
 	//Configureを呼び出す
-	int code;
 	if((code = context->ExtConfigure(&context->Context,context->Box,context->argc,context->argv))){
         av_log(ctx, AV_LOG_ERROR, "Failed to configure.Code:%d\n",code);
         return -1;
@@ -157,24 +162,37 @@ static int query_formats(AVFilterContext *ctx){
  * AVFilterPadのInput側に呼ばれる関数
  */
 
-static int filter_frame(AVFilterLink *inlink, AVFilterBufferRef *picref)
+static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
 {
-	//ポインタは基本
+    //ポインタは基本
     AVFilterContext* const ctx = inlink->dst;
     AVFilterLink* const outlink = ctx->outputs[0];
     Context* const context = (Context*)ctx->priv;
     //独自構造体に代入
-    vhext_frame frame;
-    frame.data = picref->data[0];
-    frame.linesize = picref->linesize[0];
-    frame.w = inlink->w;
-    frame.h = inlink->h;
-    frame.pts = picref->pts * av_q2d(inlink->time_base);
-	//ライブラリを呼び出す。
-	context->ExtProcess(context->Context,context->Box,&frame);
+    vhext_frame vframe;
+    vframe.data = frame->data[0];
+    vframe.linesize = frame->linesize[0];
+    vframe.w = inlink->w;
+    vframe.h = inlink->h;
+    vframe.pts = inlink->current_pts / (double)AV_TIME_BASE;
+    //ライブラリを呼び出す。
+    context->ExtProcess(context->Context,context->Box,&vframe);
 
-	return ff_filter_frame(outlink, picref);
+    return ff_filter_frame(outlink, frame);
 }
+
+#define OFFSET(x) offsetof(Context, x)
+#define FLAGS AV_OPT_FLAG_VIDEO_PARAM|AV_OPT_FLAG_FILTERING_PARAM
+
+#if CONFIG_VHEXT_FILTER
+
+static const AVOption vhext_options[] = {
+    { "args",	"vhext options (all args)",	OFFSET(vhextargs),	AV_OPT_TYPE_STRING,	{ .str=NULL },	CHAR_MIN,	CHAR_MAX,	FLAGS },
+//  { "dll",	"external dll path (nicovideo)",	OFFSET(dllpath),	AV_OPT_TYPE_STRING,	{ .str=NULL },	CHAR_MIN,	CHAR_MAX,	FLAGS },
+    { NULL }
+};
+
+AVFILTER_DEFINE_CLASS(vhext);
 
 static const AVFilterPad vhext_inputs[] = {
     {
@@ -194,19 +212,19 @@ static const AVFilterPad vhext_outputs[] = {
     },
     { NULL }
 };
-
+#endif /* CONFIG_VHEXT_FILTER */
 AVFilter ff_vf_vhext=
 {
     .name      = "vhext",
-
+    .description   = NULL_IF_CONFIG_SMALL("video hook for external dll (nicovideo)."),
     .priv_size = sizeof(Context),
+    .priv_class	= &vhext_class,
 
-    .init      = init,
-    .uninit    = uninit,
-
-    .query_formats   = query_formats,
-    .inputs    = vhext_inputs,
-    .outputs   = vhext_outputs
+    .init  = init,
+    .query_formats = query_formats,
+    .inputs = vhext_inputs,
+    .outputs = vhext_outputs,
+    .uninit = uninit,
 };
 
 /*
