@@ -139,7 +139,7 @@ static void uninit(AVFilterContext *ctx){
 
 static int query_formats(AVFilterContext *ctx){
 	//SDLで使いやすくするためにRGB24フォーマットを要求する。
-    static const enum PixelFormat pix_fmts[] = { PIX_FMT_RGB24, PIX_FMT_NONE };
+    static const enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE };
 
     ff_set_common_formats(ctx, ff_make_format_list(pix_fmts));
     return 0;
@@ -186,8 +186,9 @@ static const AVFilterPad vhext_inputs[] = {
         .name             = "default",
         .type             = AVMEDIA_TYPE_VIDEO,
         .filter_frame     = filter_frame,
-        .min_perms        = AV_PERM_READ | AV_PERM_WRITE,
-        .rej_perms       = AV_PERM_REUSE | AV_PERM_REUSE2,
+        .needs_writable   = 1,
+    //  .min_perms        = AV_PERM_READ | AV_PERM_WRITE
+    //  .rej_perms       = AV_PERM_REUSE | AV_PERM_REUSE2,
     },
     { NULL }
 };
