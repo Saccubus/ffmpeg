@@ -43,7 +43,7 @@
 
 #define SACC_DELIM '#'
 
-#define COLOR_FORMAT (PIX_FMT_RGB32)
+#define COLOR_FORMAT (AV_PIX_FMT_RGB32)
 
 #define VIDEO_STREAM (0)
 #define AUDIO_STREAM (1)
@@ -148,7 +148,7 @@ static av_cold int SaccContext_init(AVFormatContext *avctx)
 		st->id = VIDEO_STREAM;
 		st->codec->codec_type = AVMEDIA_TYPE_VIDEO;
 
-		st->codec->codec_id					= CODEC_ID_RAWVIDEO;
+		st->codec->codec_id					= AV_CODEC_ID_RAWVIDEO;
 		st->codec->pix_fmt					= COLOR_FORMAT;
 
 		st->r_frame_rate					= orig->r_frame_rate;
@@ -575,9 +575,9 @@ static int SaccToolBox_loadVideo(SaccToolBox* const box, const char* const filen
 	}
 	self->videoCount++;
 
-	self->rawFrame = avcodec_alloc_frame();
-	self->scaledFrame = avcodec_alloc_frame();
-	self->dstFrame = avcodec_alloc_frame();
+	self->rawFrame = av_frame_alloc();
+	self->scaledFrame = av_frame_alloc();
+	self->dstFrame = av_frame_alloc();
 
 	self->swsContext = sws_getContext(self->srcWidth, self->srcHeight, self->formatContext->streams[self->videoStreamIndex]->codec->pix_fmt, self->scaledWidth, self->scaledHeight, COLOR_FORMAT, SWS_BICUBIC, 0, 0, 0);
 
