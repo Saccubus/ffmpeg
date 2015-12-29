@@ -161,7 +161,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *frame)
     vframe.linesize = frame->linesize[0];
     vframe.w = inlink->w;
     vframe.h = inlink->h;
-    vframe.pts = inlink->current_pts / (double)AV_TIME_BASE;
+    vframe.pts = inlink->current_pts_us / (double)AV_TIME_BASE;
     //ライブラリを呼び出す。
     context->ExtProcess(context->Context,&vframe);
 
