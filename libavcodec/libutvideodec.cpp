@@ -40,7 +40,7 @@ static av_cold int utvideo_decode_init(AVCodecContext *avctx)
     int format;
     int begin_ret;
 
-    if (avctx->extradata_size != 16 && avctx->extradata_size != 8 ) {
+    if (avctx->extradata_size != 20 && avctx->extradata_size != 16 && avctx->extradata_size != 8 ) {
         av_log(avctx, AV_LOG_ERROR, "Extradata size (%d) mismatch.\n", avctx->extradata_size);
         return -1;
     }
@@ -50,6 +50,7 @@ static av_cold int utvideo_decode_init(AVCodecContext *avctx)
     info.original_format = AV_RL32(avctx->extradata + 4);
     info.frameinfo_size = AV_RL32(avctx->extradata + 8);
     info.flags = AV_RL32(avctx->extradata + 12);
+    info.outformat = 0;
 
     /* Pick format based on FOURCC */
     switch (avctx->codec_tag) {
@@ -122,8 +123,9 @@ static av_cold int utvideo_decode_init(AVCodecContext *avctx)
     utv->codec = CCodec::CreateInstance(UNFCC(avctx->codec_tag), "libavcodec");
 
     /* Initialize Decoding */
-    begin_ret = utv->codec->DecodeBegin(format, avctx->width, avctx->height,
-                            CBGROSSWIDTH_WINDOWS, &info, sizeof(UtVideoExtra));
+    info.outformat = format;
+    begin_ret = utv->codec->DecodeBegin(avctx->width, avctx->height,
+                            &info, sizeof(UtVideoExtra));
 
     /* Check to see if the decoder initlized properly */
     if (begin_ret != 0) {
@@ -139,15 +141,17 @@ static int utvideo_decode_frame(AVCodecContext *avctx, void *data,
                                 int *got_frame, AVPacket *avpkt)
 {
     UtVideoContext *utv = (UtVideoContext *)avctx->priv_data;
+    
     AVFrame *pic = avctx->coded_frame;
     int w = avctx->width, h = avctx->height;
+    int format = AV_RL32(avctx->extradata + 16);
 
     /* Set flags */
     pic->pict_type = AV_PICTURE_TYPE_I;
     pic->key_frame = 1;
 
     /* Decode the frame */
-    utv->codec->DecodeFrame(utv->buffer, avpkt->data, true);
+    utv->codec->DecodeFrame(utv->buffer, avpkt->data, format, CBGROSSWIDTH_WINDOWS);
 
     /* Set the output data depending on the colorspace */
     switch (avctx->pix_fmt) {

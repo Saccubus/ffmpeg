@@ -125,14 +125,16 @@ FF_ENABLE_DEPRECATION_WARNINGS
     utv->codec = CCodec::CreateInstance(UNFCC(avctx->codec_tag), "libavcodec");
 
     /* Initialize encoder */
-    utv->codec->EncodeBegin(in_format, avctx->width, avctx->height,
-                            CBGROSSWIDTH_WINDOWS);
+    info->outformat = in_format;
+    utv->codec->EncodeBegin(avctx->width, avctx->height
+                            );
 
     /* Get extradata from encoder */
     avctx->extradata_size = utv->codec->EncodeGetExtraDataSize();
-    utv->codec->EncodeGetExtraData(info, avctx->extradata_size, in_format,
-                                   avctx->width, avctx->height,
-                                   CBGROSSWIDTH_WINDOWS);
+    utv->codec->EncodeGetExtraData(info, avctx->extradata_size,
+                                   avctx->width, avctx->height
+                                  );
+
     avctx->extradata = (uint8_t *)info;
 
     /* Set flags */
@@ -145,6 +147,7 @@ static int utvideo_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
                                 const AVFrame *pic, int *got_packet)
 {
     UtVideoContext *utv = (UtVideoContext *)avctx->priv_data;
+    int format = AV_RL32(avctx->extradata + 16);
     int w = avctx->width, h = avctx->height;
     int ret, rgb_size, i;
     bool keyframe;
@@ -193,7 +196,7 @@ static int utvideo_encode_frame(AVCodecContext *avctx, AVPacket *pkt,
     }
 
     /* Encode frame */
-    pkt->size = utv->codec->EncodeFrame(dst, &keyframe, utv->buffer);
+    pkt->size = utv->codec->EncodeFrame(dst, &keyframe, utv->buffer, format, CBGROSSWIDTH_WINDOWS);
 
     if (!pkt->size) {
         av_log(avctx, AV_LOG_ERROR, "EncodeFrame failed!\n");
