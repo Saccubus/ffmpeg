@@ -59,6 +59,7 @@ typedef struct {
     uint32_t original_format;
     uint32_t frameinfo_size;
     uint32_t flags;
+    uint32_t outformat;
 } UtVideoExtra;
 
 typedef struct {
