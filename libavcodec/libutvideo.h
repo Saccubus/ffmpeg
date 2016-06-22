@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <utvideo/utvideo.h>
 #include <utvideo/Codec.h>
+#include <utvideo/Format.h>
 
 /*
  * Ut Video version 12.0.0 changed the RGB format names and removed
